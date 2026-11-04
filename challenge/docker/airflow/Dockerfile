@@ -20,4 +20,6 @@ ENV PG_JDBC_JAR=/opt/spark-jars/postgresql-${PG_JDBC_VERSION}.jar
 USER airflow
 
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+# As constraints do Airflow garantem versões compatíveis (pyspark 3.5.4, pyarrow, numpy)
+RUN pip install --no-cache-dir -r /tmp/requirements.txt \
+    --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.11.txt"

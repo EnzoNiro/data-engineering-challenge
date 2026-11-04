@@ -56,13 +56,19 @@ challenge/
 │   ├── landing.py              # preparação dos arquivos de entrada
 │   ├── jobs/                   # raw_load, trusted_load, refined_load (PySpark)
 │   ├── quality.py              # checagens pós-carga
-│   └── answers.py              # execução das queries das perguntas
+│   ├── answers.py              # execução das queries das perguntas
+│   ├── export_samples.py       # CSVs de amostra (outputs/samples/)
+│   ├── validate.py             # validação independente (Parquet x Postgres) + idempotência
+│   ├── validate_dag.py         # confere import e estrutura da DAG sem executá-la
+│   └── cli.py                  # roda etapas fora do Airflow (python -m etl.cli <etapa>)
+├── scripts/run_direct.sh       # pipeline completo sem Airflow
+├── tests/test_validate_core.py # teste do núcleo da validação com dados sintéticos
 ├── sql/
 │   ├── init/                   # DDL dos schemas e tabelas (roda na criação do warehouse)
 │   ├── transform/              # SQL de transformação (resumo diário)
 │   └── queries/                # queries das 4 perguntas
 ├── data/                       # área de trabalho da DAG (não versionada) — veja data/README.md
-└── outputs/                    # answers.md e data_quality.md gerados pela DAG
+└── outputs/                    # answers.md, data_quality.md, validation.md, samples/*.csv
 ```
 
 ## Como executar
@@ -107,11 +113,41 @@ máquina.
 3. Modo de execução:
    - `airflow_dag` (padrão): executa a DAG `wecogno_nyc_taxi_etl` com `airflow dags test`;
    - `direct_jobs`: executa os mesmos passos direto em Python (mais simples de depurar).
+   - `run_twice` (opcional): roda o pipeline duas vezes e confere que as contagens não mudaram
+     (prova de que a carga é idempotente; dobra o tempo).
 4. Ao terminar, as tabelas das 4 perguntas aparecem no **resumo da execução** (aba Summary) e os
-   arquivos `answers.md` e `data_quality.md` ficam no artefato `etl-results`.
+   arquivos `answers.md`, `data_quality.md`, `validation.md` e os CSVs de `samples/` ficam no
+   artefato `etl-results`.
 
 O banco do CI é descartável: ele roda com `fsync` desligado para acelerar a carga. A execução
 leva em torno de uma hora, dependendo do runner.
+
+## Como validar
+
+A DAG termina com duas tarefas de verificação, além das checagens de contagem entre camadas:
+
+- **`export_samples`**: grava CSVs em `outputs/samples/` (resumo diário, amostras de raw, trusted e
+  refined, linhas rejeitadas pela trusted, as 20 viagens mais longas e viagens implausíveis), para
+  inspecionar os dados sem cliente SQL.
+- **`validate_results`** (`etl/validate.py`): recalcula, **sem Spark e sem Postgres**, direto dos 12
+  Parquet (PyArrow + NumPy), as contagens por mês da raw (rodapé dos arquivos), as linhas da
+  trusted/refined, as viagens plausíveis, a Q2, a Q3 (distância e dia) e a Q4 (média, desvio, mínimo,
+  máximo e quartis), e compara com o que o pipeline gravou. Cada checagem vira uma linha de
+  `outputs/validation.md` e qualquer divergência faz a tarefa falhar.
+
+Outras verificações:
+
+- **Estrutura da DAG** sem executar: `python -m etl.validate_dag` (o workflow roda isso antes da
+  carga e imprime `airflow tasks list wecogno_nyc_taxi_etl --tree`).
+- **Idempotência**: execute o workflow com `run_twice` marcado; `outputs/idempotency.md` compara as
+  contagens após a 1ª e a 2ª execução.
+- **Núcleo da validação**: `cd challenge && PYTHONPATH=. python tests/test_validate_core.py`
+  compara o cálculo em NumPy com um cálculo linha a linha em Python puro, em dados sintéticos com
+  nulos, datas invertidas, distâncias negativas e outliers.
+- **Reproduzir uma resposta à mão** no Postgres local: veja `sql/queries/` e rode no `psql`.
+
+> Os resultados de `validation.md` só valem depois de uma execução do workflow; confira o resumo da
+> execução no GitHub Actions.
 
 ## Decisões tomadas
 

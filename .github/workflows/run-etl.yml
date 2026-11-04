@@ -12,6 +12,10 @@ on:
         options:
           - airflow_dag   # executa a DAG wecogno_nyc_taxi_etl com `airflow dags test`
           - direct_jobs   # executa os mesmos passos direto em Python (mais simples de depurar)
+      run_twice:
+        description: "Rodar o pipeline 2x e conferir que nada duplicou (teste de idempotência; dobra o tempo)"
+        type: boolean
+        default: false
 
 jobs:
   etl:
@@ -70,7 +74,7 @@ jobs:
       - name: Instalar Airflow e PySpark
         run: |
           pip install --upgrade pip
-          pip install "apache-airflow==2.10.5" "pyspark==3.5.4" psycopg2-binary \
+          pip install "apache-airflow==2.10.5" "pyspark==3.5.4" psycopg2-binary pyarrow numpy \
             --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.11.txt"
 
       - name: Baixar driver JDBC do PostgreSQL
@@ -81,6 +85,13 @@ jobs:
 
       - name: Apontar /opt/airflow para challenge/
         run: sudo ln -sfn "$GITHUB_WORKSPACE/challenge" /opt/airflow
+
+      - name: Validar a estrutura da DAG (sem executar)
+        run: |
+          airflow db migrate
+          python -m etl.validate_dag
+          airflow tasks list wecogno_nyc_taxi_etl --tree
+        working-directory: challenge
 
       - name: Criar schemas e tabelas do warehouse
         run: |
@@ -99,25 +110,35 @@ jobs:
 
       - name: Rodar a DAG no Airflow
         if: ${{ inputs.mode == 'airflow_dag' }}
-        run: |
-          airflow db migrate
-          airflow dags test wecogno_nyc_taxi_etl
+        run: airflow dags test wecogno_nyc_taxi_etl
 
       - name: Rodar os jobs diretamente
         if: ${{ inputs.mode == 'direct_jobs' }}
+        run: challenge/scripts/run_direct.sh
+
+      - name: Guardar contagens da 1ª execução
+        if: ${{ inputs.run_twice }}
         working-directory: challenge
+        run: python -m etl.cli counts outputs/counts_run1.json
+
+      - name: Rodar o pipeline pela 2ª vez (idempotência)
+        if: ${{ inputs.run_twice }}
         run: |
-          python -c "from etl.landing import prepare_landing; prepare_landing()"
-          python -m etl.jobs.raw_load
-          python -m etl.jobs.trusted_load
-          python -m etl.jobs.refined_load
-          python -c "from etl.quality import run_quality_checks; run_quality_checks()"
-          python -c "from etl.answers import run_answers; run_answers()"
+          if [ "${{ inputs.mode }}" = "direct_jobs" ]; then
+            challenge/scripts/run_direct.sh
+          else
+            airflow dags test wecogno_nyc_taxi_etl
+          fi
+
+      - name: Comparar contagens (1ª x 2ª execução)
+        if: ${{ inputs.run_twice }}
+        working-directory: challenge
+        run: python -m etl.cli compare outputs/counts_run1.json
 
       - name: Mostrar resultados no resumo da execução
         if: always()
         run: |
-          for f in challenge/outputs/answers.md challenge/outputs/data_quality.md; do
+          for f in challenge/outputs/validation.md challenge/outputs/idempotency.md challenge/outputs/answers.md challenge/outputs/data_quality.md; do
             if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; echo >> "$GITHUB_STEP_SUMMARY"; fi
           done
           df -h /
@@ -127,5 +148,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: etl-results
-          path: challenge/outputs/*.md
+          path: |
+            challenge/outputs/*.md
+            challenge/outputs/*.json
+            challenge/outputs/samples/*.csv
           if-no-files-found: ignore
