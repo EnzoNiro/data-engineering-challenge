@@ -146,8 +146,21 @@ Outras verificações:
   nulos, datas invertidas, distâncias negativas e outliers.
 - **Reproduzir uma resposta à mão** no Postgres local: veja `sql/queries/` e rode no `psql`.
 
-> Os resultados de `validation.md` só valem depois de uma execução do workflow; confira o resumo da
-> execução no GitHub Actions.
+### Resultado da validação (execução do workflow com `run_twice`)
+
+- **Estrutura da DAG:** OK (8 tarefas, ordem `prepare_landing >> load_raw >> load_trusted >> load_refined >> quality_checks >> generate_answers >> export_samples >> validate_results`).
+- **Validação independente:** **38 de 38 checagens OK** nas duas execuções. Raw por mês e total (39.656.098), trusted e refined (39.641.924), Q2, Q3 e Q4 recalculados direto dos Parquet batem com o Postgres.
+- **Idempotência:** após a 2ª execução as contagens não mudaram.
+
+| tabela | 1ª execução | 2ª execução | status |
+| --- | ---: | ---: | --- |
+| raw.yellow_tripdata | 39.656.098 | 39.656.098 | OK |
+| trusted.yellow_tripdata | 39.641.924 | 39.641.924 | OK |
+| refined.trips | 39.641.924 | 39.641.924 | OK |
+| refined.daily_summary | 365 | 365 | OK |
+
+A validação confere o pipeline contra a mesma regra de negócio escrita de forma independente; ela
+não decide se as regras da trusted são as certas (isso está explicado em "Decisões tomadas").
 
 ## Decisões tomadas
 
