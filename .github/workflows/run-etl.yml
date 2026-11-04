@@ -1,0 +1,131 @@
+name: Run ETL (Airflow + PySpark + PostgreSQL)
+
+# Execução manual: Actions -> "Run ETL" -> Run workflow.
+# Roda o mesmo pipeline do docker-compose, mas no runner do GitHub (sem Docker local).
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Como executar o pipeline"
+        type: choice
+        default: airflow_dag
+        options:
+          - airflow_dag   # executa a DAG wecogno_nyc_taxi_etl com `airflow dags test`
+          - direct_jobs   # executa os mesmos passos direto em Python (mais simples de depurar)
+
+jobs:
+  etl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: wecogno
+          POSTGRES_PASSWORD: wecogno
+          POSTGRES_DB: wecogno_dw
+        ports:
+          - 5432:5432
+        options: >-
+          --shm-size=1g
+          --health-cmd "pg_isready -U wecogno -d wecogno_dw"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # O código e a DAG usam /opt/airflow como raiz; ele aponta para challenge/ (passo abaixo)
+      AIRFLOW_HOME: /opt/airflow
+      PYTHONPATH: /opt/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      WAREHOUSE_HOST: localhost
+      WAREHOUSE_PORT: "5432"
+      WAREHOUSE_DB: wecogno_dw
+      WAREHOUSE_USER: wecogno
+      WAREHOUSE_PASSWORD: wecogno
+      PGPASSWORD: wecogno
+      SOURCE_DIR: ${{ github.workspace }}/nyc-tlc-data
+      PG_JDBC_JAR: ${{ github.workspace }}/jars/postgresql-42.7.4.jar
+      SPARK_DRIVER_MEMORY: 6g
+      SPARK_LOCAL_CORES: "4"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Liberar espaço em disco
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar Airflow e PySpark
+        run: |
+          pip install --upgrade pip
+          pip install "apache-airflow==2.10.5" "pyspark==3.5.3" psycopg2-binary \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.11.txt"
+
+      - name: Baixar driver JDBC do PostgreSQL
+        run: |
+          mkdir -p jars
+          curl -fsSL -o jars/postgresql-42.7.4.jar \
+            https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.4/postgresql-42.7.4.jar
+
+      - name: Apontar /opt/airflow para challenge/
+        run: sudo ln -sfn "$GITHUB_WORKSPACE/challenge" /opt/airflow
+
+      - name: Criar schemas e tabelas do warehouse
+        run: |
+          psql -h localhost -U wecogno -d wecogno_dw -v ON_ERROR_STOP=1 \
+            -f challenge/sql/init/01_init_warehouse.sql
+
+      - name: Ajustar Postgres para carga em massa (banco descartável do CI)
+        run: |
+          psql -h localhost -U wecogno -d wecogno_dw \
+            -c "ALTER SYSTEM SET synchronous_commit = off" \
+            -c "ALTER SYSTEM SET fsync = off" \
+            -c "ALTER SYSTEM SET full_page_writes = off" \
+            -c "ALTER SYSTEM SET max_wal_size = '8GB'" \
+            -c "ALTER SYSTEM SET checkpoint_timeout = '30min'" \
+            -c "SELECT pg_reload_conf()"
+
+      - name: Rodar a DAG no Airflow
+        if: ${{ inputs.mode == 'airflow_dag' }}
+        run: |
+          airflow db migrate
+          airflow dags test wecogno_nyc_taxi_etl
+
+      - name: Rodar os jobs diretamente
+        if: ${{ inputs.mode == 'direct_jobs' }}
+        working-directory: challenge
+        run: |
+          python -c "from etl.landing import prepare_landing; prepare_landing()"
+          python -m etl.jobs.raw_load
+          python -m etl.jobs.trusted_load
+          python -m etl.jobs.refined_load
+          python -c "from etl.quality import run_quality_checks; run_quality_checks()"
+          python -c "from etl.answers import run_answers; run_answers()"
+
+      - name: Mostrar resultados no resumo da execução
+        if: always()
+        run: |
+          for f in challenge/outputs/answers.md challenge/outputs/data_quality.md; do
+            if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; echo >> "$GITHUB_STEP_SUMMARY"; fi
+          done
+          df -h /
+
+      - name: Guardar os resultados como artefato
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: etl-results
+          path: challenge/outputs/*.md
+          if-no-files-found: ignore

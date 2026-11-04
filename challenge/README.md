@@ -95,6 +95,24 @@ disco livre (são ~40 milhões de linhas em três camadas).
 
 Para recomeçar do zero (apaga os bancos): `docker compose down -v`.
 
+## Executar pelo GitHub Actions (sem Docker local)
+
+O workflow `.github/workflows/run-etl.yml` roda o pipeline no runner do GitHub, com um
+PostgreSQL como serviço, Airflow e PySpark instalados via pip. Não precisa de Docker na sua
+máquina.
+
+1. No GitHub, abra a aba **Actions** do fork. Se aparecer o aviso de workflows desativados em
+   forks, clique em **I understand my workflows, go ahead and enable them**.
+2. Escolha o workflow **Run ETL (Airflow + PySpark + PostgreSQL)** → **Run workflow**.
+3. Modo de execução:
+   - `airflow_dag` (padrão): executa a DAG `wecogno_nyc_taxi_etl` com `airflow dags test`;
+   - `direct_jobs`: executa os mesmos passos direto em Python (mais simples de depurar).
+4. Ao terminar, as tabelas das 4 perguntas aparecem no **resumo da execução** (aba Summary) e os
+   arquivos `answers.md` e `data_quality.md` ficam no artefato `etl-results`.
+
+O banco do CI é descartável: ele roda com `fsync` desligado para acelerar a carga. A execução
+leva em torno de uma hora, dependendo do runner.
+
 ## Decisões tomadas
 
 - **PySpark em modo local** dentro do container do Airflow, chamado por `BashOperator`
