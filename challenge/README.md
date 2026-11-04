@@ -8,10 +8,10 @@ Este repositório é um fork de
 [datarisk-io/data-engineering-challenge](https://github.com/datarisk-io/data-engineering-challenge);
 conforme o enunciado, o código e a documentação ficam no diretório `challenge/`.
 
-> **Status de validação:** o código foi verificado estaticamente (sintaxe Python e
-> `docker compose config`), mas **ainda não foi executado ponta a ponta**. Os resultados da
-> seção [Respostas](#respostas) devem ser preenchidos com a saída real de `outputs/answers.md`
-> depois da primeira execução.
+> **Status de validação:** o pipeline foi executado ponta a ponta no GitHub Actions
+> (workflow `Run ETL`, modo `airflow_dag`): as 6 tarefas da DAG terminaram em sucesso em
+> cerca de 19 minutos, e as contagens fecham entre as camadas (refined = trusted). Os números
+> da seção [Respostas](#respostas) vêm dessa execução.
 
 ## Arquitetura
 
@@ -168,9 +168,25 @@ plausíveis.
 
 ## Respostas
 
-> **Pendente:** preencher com os valores de `outputs/answers.md` após a execução.
+Resumo (valores da execução no GitHub Actions):
+
+| # | Pergunta | Resposta |
+|---|---|---|
+| 1 | Total de registros na tabela final | **39.641.924** |
+| 2 | Viagens iniciadas e finalizadas em 17/06/2022 | **123.834** começaram e terminaram no dia (125.586 iniciadas; 125.342 finalizadas) |
+| 3 | Dia da viagem mais longa | **2022-10-28** (389.678,46 milhas, dado claramente inválido); entre as plausíveis, **2022-06-13** (380,13 milhas) |
+| 4 | Distribuição da distância | média 5,9594, desvio padrão 599,2978, mín. 0, máx. 389.678,46; quartis 1,10 / 1,90 / 3,56 |
+
+Da raw (39.656.098 linhas) para a trusted foram descartados 14.174 registros (0,036%). Na
+refined, 65.538 viagens (0,17%) ficam com `is_plausible = false`.
 
 As queries abaixo são exatamente as de `sql/queries/`.
+
+**Sobre o outlier da Q3 e da Q4:** a viagem de 389.678,46 milhas durou 13 minutos, o que dá
+uma velocidade média de cerca de 1,8 milhão de mph: é erro de medição na fonte, não uma viagem
+real. Por isso as duas perguntas trazem também a leitura apenas com as viagens plausíveis
+(duração de até 24 h e velocidade média de até 100 mph). Nessa leitura, o desvio padrão cai de
+599,30 para 4,48 e a média de 5,96 para 3,50 milhas.
 
 ### 1. Qual o total de registros na tabela final?
 
@@ -184,9 +200,9 @@ SELECT 'refined.trips (final)'   AS tabela, count(*) AS registros FROM refined.t
 
 | tabela | registros |
 |---|---|
-| raw.yellow_tripdata | _a preencher_ |
-| trusted.yellow_tripdata | _a preencher_ |
-| refined.trips (final) | _a preencher_ |
+| raw.yellow_tripdata | 39656098 |
+| trusted.yellow_tripdata | 39641924 |
+| refined.trips (final) | 39641924 |
 
 ### 2. Total de viagens iniciadas e finalizadas no dia 17 de junho
 
@@ -213,7 +229,7 @@ WHERE tpep_pickup_datetime  <  DATE '2022-06-18'
 
 | viagens_iniciadas | viagens_finalizadas | iniciadas_e_finalizadas_no_dia |
 |---|---|---|
-| _a preencher_ | _a preencher_ | _a preencher_ |
+| 125586 | 125342 | 123834 |
 
 ### 3. Qual foi o dia da viagem mais longa percorrida?
 
@@ -250,8 +266,8 @@ UNION ALL
 
 | base | dia_da_viagem | distancia_milhas | inicio | fim | duracao_min | velocidade_media_mph |
 |---|---|---|---|---|---|---|
-| todas as viagens (trusted) | _a preencher_ | | | | | |
-| somente viagens plausiveis | _a preencher_ | | | | | |
+| todas as viagens (trusted) | 2022-10-28 | 389678.46 | 2022-10-28 05:19:00 | 2022-10-28 05:32:00 | 13.0 | 1798516.0 |
+| somente viagens plausiveis | 2022-06-13 | 380.13 | 2022-06-13 01:36:18 | 2022-06-13 08:21:44 | 405.4 | 56.3 |
 
 ### 4. Distribuição da distância percorrida
 
@@ -284,8 +300,8 @@ WHERE is_plausible;
 
 | base | viagens | media | desvio_padrao | minimo | q1_25 | mediana_50 | q3_75 | maximo |
 |---|---|---|---|---|---|---|---|---|
-| todas as viagens (trusted) | _a preencher_ | | | | | | | |
-| somente viagens plausiveis | _a preencher_ | | | | | | | |
+| todas as viagens (trusted) | 39641924 | 5.9594 | 599.2978 | 0 | 1.1000 | 1.9000 | 3.5600 | 389678.46 |
+| somente viagens plausiveis | 39576386 | 3.5017 | 4.4785 | 0 | 1.1000 | 1.9000 | 3.5500 | 380.13 |
 
 ## Solução de problemas
 
