@@ -31,4 +31,22 @@ BEGIN
     END IF;
 END $$;
 
+-- Troca atomica via staging (mesmo caminho do write_table): LIKE do pai particionado + TRUNCATE + INSERT SELECT
+CREATE UNLOGGED TABLE raw.yellow_tripdata_staging (LIKE raw.yellow_tripdata INCLUDING DEFAULTS);
+INSERT INTO raw.yellow_tripdata_staging (tpep_pickup_datetime, file_month) VALUES
+    ('2022-03-05 12:00:00', 3), ('2002-01-01 00:00:00', 1);
+TRUNCATE TABLE raw.yellow_tripdata;
+INSERT INTO raw.yellow_tripdata SELECT * FROM raw.yellow_tripdata_staging;
+
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM raw.yellow_tripdata) <> 2
+       OR (SELECT count(*) FROM raw.yellow_tripdata_2022_03) <> 1
+       OR (SELECT count(*) FROM raw.yellow_tripdata_default) <> 1 THEN
+        RAISE EXCEPTION 'troca via staging incorreta';
+    END IF;
+END $$;
+
+DROP TABLE raw.yellow_tripdata_staging;
+
 ROLLBACK;

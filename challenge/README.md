@@ -171,17 +171,19 @@ não decide se as regras da trusted são as certas (isso está explicado em "Dec
   leitura e na escrita sem exigir um cluster.
 - **Dois PostgreSQL separados:** um para metadados do Airflow e outro para o warehouse.
 - **Camadas em schemas distintos** (`raw`, `trusted`, `refined`), com DDL explícito em
-  `sql/init`. As cargas **recarregam** a tabela: o job faz `TRUNCATE` (em SQL, que esvazia
-  também as partições e mantém o DDL) e depois grava com `append`; o resumo diário é refeito
-  com `TRUNCATE` + `INSERT ... SELECT`. Nada é acrescentado em cima do que já existia, então
-  rodar a DAG de novo **não duplica** os dados (carga idempotente).
+  `sql/init`. As cargas usam **staging e troca atômica**: o Spark
+  grava em `<tabela>_staging`; só depois do sucesso uma transação faz `TRUNCATE` da tabela final
+  e `INSERT ... SELECT` da staging. Se o job falhar no meio, a tabela final continua como estava
+  (a transação nem começou). O resumo diário é refeito com `TRUNCATE` + `INSERT ... SELECT`.
+  Nada é acrescentado em cima do que já existia, então rodar a DAG de novo **não duplica** os
+  dados (carga idempotente).
 - **Tabelas particionadas por mês** de `tpep_pickup_datetime` (`raw`, `trusted` e `refined.trips`):
   12 partições de 2022 mais uma `DEFAULT`, que recebe pickup nulo ou fora de 2022 (a raw tem
   timestamps de 2002, 2008 etc.) e fica vazia na trusted e na refined. Particionei pela própria
   coluna de data do evento, e não por colunas `ano`/`mes` extras, para que filtros pelo horário
   da viagem (como a Q2) leiam só as partições necessárias. Por que não pelo `overwrite` do Spark:
   ele emite `TRUNCATE TABLE ONLY`, que o Postgres recusa em tabela particionada, então o
-  `TRUNCATE` é feito em SQL antes da escrita. Nesta versão a carga ainda é total; a evolução
+  `TRUNCATE` é feito em SQL, dentro da troca atômica. Nesta versão a carga ainda é total; a evolução
   natural é refazer só a partição do mês (carga incremental).
 - **Arquivos já são Parquet:** apesar do `.gz`, a compressão é interna; não há descompactação.
 - **Schema canônico por arquivo:** os meses têm tipos inconsistentes (`passenger_count`,

@@ -53,30 +53,50 @@ def read_table(
     )
 
 
-def truncate_table(table: str) -> None:
-    """TRUNCATE da tabela (e de todas as particoes dela). Feito em SQL de proposito: com
-    mode('overwrite') + truncate o Spark emite 'TRUNCATE TABLE ONLY', que o Postgres recusa em
-    tabela particionada."""
+def _swap_into(table: str, staging: str) -> None:
+    """Troca atômica: numa única transação esvazia a tabela final (e as partições) e copia a staging.
+    Se algo falhar, o ROLLBACK deixa a tabela final exatamente como estava."""
+    from contextlib import closing
+
+    with closing(config.get_connection()) as conn:
+        with conn:  # commit no fim do bloco; rollback se houver exceção
+            with conn.cursor() as cur:
+                cur.execute(f"TRUNCATE TABLE {table}")
+                cur.execute(f"INSERT INTO {table} SELECT * FROM {staging}")
+
+
+def _execute(sql: str) -> None:
     from contextlib import closing
 
     with closing(config.get_connection()) as conn:
         conn.autocommit = True
         with conn.cursor() as cur:
-            cur.execute(f"TRUNCATE TABLE {table}")
+            cur.execute(sql)
 
 
 def write_table(df: DataFrame, table: str, num_partitions: int | None = None) -> None:
-    """Recarrega a tabela: TRUNCATE (mantem o DDL e as particoes) + append => carga idempotente."""
-    truncate_table(table)
+    """Recarrega a tabela sem deixá-la vazia ou pela metade se a carga falhar:
+
+    1. o Spark grava em <tabela>_staging (cópia da estrutura, sem partições);
+    2. só depois do sucesso, uma transação faz TRUNCATE da tabela final + INSERT ... SELECT da staging;
+    3. a staging é apagada.
+
+    Falha no passo 1 não toca na tabela final. Rodar de novo recomeça da staging limpa (idempotente).
+    """
+    staging = f"{table}_staging"
+    _execute(f"DROP TABLE IF EXISTS {staging}")
+    _execute(f"CREATE UNLOGGED TABLE {staging} (LIKE {table} INCLUDING DEFAULTS)")
     (
         df.write.format("jdbc")
         .option("url", config.JDBC_URL)
         .option("user", config.WAREHOUSE_USER)
         .option("password", config.WAREHOUSE_PASSWORD)
         .option("driver", config.JDBC_DRIVER)
-        .option("dbtable", table)
+        .option("dbtable", staging)
         .option("batchsize", "50000")
         .option("numPartitions", num_partitions or config.SPARK_CORES)
         .mode("append")
         .save()
     )
+    _swap_into(table, staging)
+    _execute(f"DROP TABLE {staging}")
