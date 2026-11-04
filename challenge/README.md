@@ -120,7 +120,10 @@ leva em torno de uma hora, dependendo do runner.
   leitura e na escrita sem exigir um cluster.
 - **Dois PostgreSQL separados:** um para metadados do Airflow e outro para o warehouse.
 - **Camadas em schemas distintos** (`raw`, `trusted`, `refined`), com DDL explícito em
-  `sql/init`. As cargas usam `truncate` + `append`, então rodar a DAG de novo é **idempotente**.
+  `sql/init`. As cargas **sobrescrevem** a tabela (`overwrite` com `truncate`: o Spark esvazia
+  a tabela, mantém o DDL e recarrega tudo), e o resumo diário é refeito com `TRUNCATE` +
+  `INSERT ... SELECT`. Nada é acrescentado em cima do que já existia, então rodar a DAG de
+  novo **não duplica** os dados (carga idempotente).
 - **Arquivos já são Parquet:** apesar do `.gz`, a compressão é interna; não há descompactação.
 - **Schema canônico por arquivo:** os meses têm tipos inconsistentes (`passenger_count`,
   `RatecodeID`, caixa de `airport_fee`). Cada arquivo é lido sozinho, convertido para o schema
