@@ -1,0 +1,24 @@
+# Dados (grandes demais para o Git; ficam apenas na máquina local)
+data/*
+!data/.gitkeep
+!data/README.md
+
+# Saídas geradas pelo pipeline (answers.md é versionado de propósito)
+outputs/*
+!outputs/.gitkeep
+!outputs/answers.md
+!outputs/data_quality.md
+
+# Logs do Airflow
+logs/*
+!logs/.gitkeep
+
+# Segredos / ambiente local
+.env
+
+# Python / SO
+__pycache__/
+*.pyc
+.DS_Store
+.idea/
+.vscode/
