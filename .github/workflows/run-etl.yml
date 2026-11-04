@@ -70,7 +70,7 @@ jobs:
       - name: Instalar Airflow e PySpark
         run: |
           pip install --upgrade pip
-          pip install "apache-airflow==2.10.5" "pyspark==3.5.3" psycopg2-binary \
+          pip install "apache-airflow==2.10.5" "pyspark==3.5.4" psycopg2-binary \
             --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.11.txt"
 
       - name: Baixar driver JDBC do PostgreSQL
