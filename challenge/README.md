@@ -148,10 +148,11 @@ Outras verificações:
   nulos, datas invertidas, distâncias negativas e outliers.
 - **Reproduzir uma resposta à mão** no Postgres local: veja `sql/queries/` e rode no `psql`.
 
-### Resultado da validação (run #3, antes do particionamento)
+### Resultado da validação (execução do workflow com `run_twice`, após o particionamento)
 
 - **Estrutura da DAG:** OK (8 tarefas, ordem `prepare_landing >> load_raw >> load_trusted >> load_refined >> quality_checks >> generate_answers >> export_samples >> validate_results`).
-- **Validação independente:** **38 de 38 checagens OK** nas duas execuções. Raw por mês e total (39.656.098), trusted e refined (39.641.924), Q2, Q3 e Q4 recalculados direto dos Parquet batem com o Postgres.
+- **Teste do particionamento:** OK (roteamento para a partição certa, `DEFAULT` para pickup nulo ou fora de 2022, `TRUNCATE` do pai e troca via staging).
+- **Validação independente:** **65 de 65 checagens OK** nas duas execuções. Raw por mês e total (39.656.098), linhas por partição (12 meses e `DEFAULT`) na raw e na trusted, trusted e refined (39.641.924), Q2, Q3 e Q4 recalculados direto dos Parquet batem com o Postgres.
 - **Idempotência:** após a 2ª execução as contagens não mudaram.
 
 | tabela | 1ª execução | 2ª execução | status |
