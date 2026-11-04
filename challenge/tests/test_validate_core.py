@@ -55,14 +55,19 @@ def brute_force(rows):
     y0, y1 = dt.datetime(YEAR, 1, 1), dt.datetime(YEAR + 1, 1, 1)
     d0, d1 = dt.datetime(2022, 6, 17), dt.datetime(2022, 6, 18)
     valid, plausible = [], []
+    raw_part = [0] * 12
+    valid_part = [0] * 12
     started = finished = both = 0
     for pick, drop, dist, np_, nd_, ndist in rows:
+        if not np_ and y0 <= pick < y1:
+            raw_part[pick.month - 1] += 1
         if np_ or nd_ or ndist:
             continue
         if not (drop >= pick and y0 <= pick < y1 and dist >= 0):
             continue
         dur = ((to_us(drop) // US) - (to_us(pick) // US)) / 60.0
         valid.append((dist, pick))
+        valid_part[pick.month - 1] += 1
         speed = dist / (dur / 60.0) if dur > 0 else math.nan
         if dur > 0 and dur <= 1440 and speed <= 100:
             plausible.append((dist, pick))
@@ -70,7 +75,7 @@ def brute_force(rows):
         started += ip
         finished += idr
         both += ip and idr
-    return valid, plausible, (started, finished, both)
+    return valid, plausible, (started, finished, both), raw_part, valid_part
 
 
 def stats(pairs):
@@ -95,10 +100,14 @@ def check(rows, chunk):
             np.array([r[2] for r in part], dtype="float64"), np.array([not r[5] for r in part]),
         )
     got = acc.expected()
-    valid, plausible, q2 = brute_force(rows)
+    valid, plausible, q2, raw_part, valid_part = brute_force(rows)
 
     assert got["rows"] == len(rows)
     assert got["valid"] == len(valid), (got["valid"], len(valid))
+    assert got["raw_part"][:12] == raw_part, (got["raw_part"], raw_part)
+    assert got["raw_part"][12] == len(rows) - sum(raw_part)  # DEFAULT: nulo ou fora do ano
+    assert got["valid_part"] == valid_part, (got["valid_part"], valid_part)
+    assert sum(got["valid_part"]) == got["valid"]
     assert (got["q2"]["started"], got["q2"]["finished"], got["q2"]["both"]) == q2, (got["q2"], q2)
     for key, pairs in (("all", valid), ("plausible", plausible)):
         want, have = stats(pairs), got[key]

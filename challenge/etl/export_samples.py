@@ -8,9 +8,9 @@ log = logging.getLogger(__name__)
 
 EXPORTS = {
     "daily_summary": f"SELECT * FROM {config.DAILY_SUMMARY_TABLE} ORDER BY trip_date",
-    "raw_sample": f"SELECT * FROM {config.RAW_TABLE} TABLESAMPLE SYSTEM (0.01) LIMIT 200",
-    "trusted_sample": f"SELECT * FROM {config.TRUSTED_TABLE} TABLESAMPLE SYSTEM (0.01) LIMIT 200",
-    "refined_sample": f"SELECT * FROM {config.REFINED_TABLE} TABLESAMPLE SYSTEM (0.01) LIMIT 200",
+    "raw_sample": f"SELECT * FROM {config.RAW_TABLE} WHERE random() < 0.00001 LIMIT 200",
+    "trusted_sample": f"SELECT * FROM {config.TRUSTED_TABLE} WHERE random() < 0.00001 LIMIT 200",
+    "refined_sample": f"SELECT * FROM {config.REFINED_TABLE} WHERE random() < 0.00001 LIMIT 200",
     "raw_rejected_sample": (
         f"SELECT r.* FROM {config.RAW_TABLE} r WHERE NOT (r.tpep_pickup_datetime IS NOT NULL "
         "AND r.tpep_dropoff_datetime IS NOT NULL AND r.tpep_dropoff_datetime >= r.tpep_pickup_datetime "

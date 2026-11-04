@@ -60,8 +60,18 @@ class Accumulator:
         self.started = self.finished = self.both = 0
         self._all: list = []
         self._pl: list = []
+        # fronteiras mensais (13 valores) para contar linhas por partição esperada
+        self.bounds = np.array(
+            [_us(f"{year}-{m:02d}-01T00:00:00") for m in range(1, 13)] + [self.y1], dtype="int64"
+        )
+        self.raw_part = np.zeros(12, dtype="int64")    # raw: linhas com pickup em cada mês do ano
+        self.valid_part = np.zeros(12, dtype="int64")  # trusted: linhas válidas por mês
         self.best_all = None  # (distancia, pickup_us)
         self.best_pl = None
+
+    def _month(self, pick):
+        """Índice do mês (0 a 11) de cada pickup; só chamar com pickups já dentro do ano."""
+        return self.np.searchsorted(self.bounds, pick, side="right") - 1
 
     @staticmethod
     def _best(best, x, p):
@@ -76,6 +86,8 @@ class Accumulator:
     def add(self, pick, pick_ok, drop, drop_ok, dist, dist_ok) -> None:
         np = self.np
         self.rows += len(pick)
+        in_year = pick_ok & (pick >= self.y0) & (pick < self.y1)
+        self.raw_part += np.bincount(self._month(pick[in_year]), minlength=12)
         with np.errstate(all="ignore"):
             valid = (
                 pick_ok & drop_ok & dist_ok
@@ -85,6 +97,7 @@ class Accumulator:
             )
             p, d, x = pick[valid], drop[valid], dist[valid]
             self.valid += int(len(x))
+            self.valid_part += np.bincount(self._month(p), minlength=12)
             if len(x) == 0:
                 return
 
@@ -108,6 +121,8 @@ class Accumulator:
         out = {
             "rows": self.rows,
             "valid": self.valid,
+            "raw_part": [int(v) for v in self.raw_part] + [self.rows - int(self.raw_part.sum())],
+            "valid_part": [int(v) for v in self.valid_part],
             "q2": {"started": self.started, "finished": self.finished, "both": self.both},
         }
         for key, chunks, best in (("all", self._all, self.best_all), ("plausible", self._pl, self.best_pl)):
@@ -183,6 +198,15 @@ def _stats_sql(table: str, where: str) -> str:
     )
 
 
+def partition_counts(cur, table: str) -> list[int]:
+    """Linhas por partição física: 12 meses (índice 0 a 11) e a DEFAULT (índice 12)."""
+    cur.execute(f"SELECT c.relname, count(*) FROM {table} t JOIN pg_class c ON c.oid = t.tableoid GROUP BY 1")
+    counts = [0] * 13
+    for relname, n in cur.fetchall():
+        counts[12 if relname.endswith("_default") else int(relname[-2:]) - 1] = int(n)
+    return counts
+
+
 def postgres_observed(cur, year: int) -> dict:
     day = dt.date(year, *Q2_DAY)
     nxt = day + dt.timedelta(days=1)
@@ -193,6 +217,9 @@ def postgres_observed(cur, year: int) -> dict:
     for label, table in (("trusted", config.TRUSTED_TABLE), ("refined", config.REFINED_TABLE)):
         cur.execute(f"SELECT count(*) FROM {table}")
         obs[label] = int(cur.fetchone()[0])
+
+    for label, table in (("raw", config.RAW_TABLE), ("trusted", config.TRUSTED_TABLE), ("refined", config.REFINED_TABLE)):
+        obs[f"part_{label}"] = partition_counts(cur, table)
 
     cur.execute(
         "SELECT "
@@ -243,6 +270,15 @@ def build_checks(expected: dict, footer_rows: dict, observed: dict) -> list[tupl
     add("raw: total de linhas", sum(footer_rows.values()), sum(observed["raw_by_month"].values()))
     add("trusted: linhas (regras reaplicadas)", expected["valid"], observed["trusted"])
     add("refined: linhas (= trusted)", expected["valid"], observed["refined"])
+
+    names = [f"{m:02d}" for m in range(1, 13)] + ["DEFAULT"]
+    exp_raw = expected["raw_part"]
+    exp_trusted = expected["valid_part"] + [0]
+    for i, name in enumerate(names):
+        add(f"partição raw {name}", exp_raw[i], observed["part_raw"][i])
+    for i, name in enumerate(names):
+        add(f"partição trusted {name}", exp_trusted[i], observed["part_trusted"][i])
+    add("partições refined = partições trusted", exp_trusted, observed["part_refined"])
 
     for key, label in (("started", "iniciadas"), ("finished", "finalizadas"), ("both", "iniciadas e finalizadas")):
         add(f"Q2: viagens {label} em 17/06", expected["q2"][key], observed["q2"][key])

@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS raw.yellow_tripdata (
     source_file             text,
     file_month              integer,
     ingested_at             timestamp
-);
+) PARTITION BY RANGE (tpep_pickup_datetime);
 
 -- ---------------------------------------------------------------------------
 -- TRUSTED: apenas registros que passam nas regras de qualidade
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS trusted.yellow_tripdata (
     source_file             text,
     file_month              integer,
     trusted_at              timestamp
-);
+) PARTITION BY RANGE (tpep_pickup_datetime);
 
 -- ---------------------------------------------------------------------------
 -- REFINED: tabela final (viagem a viagem, enriquecida) + resumo diário
@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS refined.trips (
     avg_speed_mph           double precision,
     is_plausible            boolean,           -- duração e velocidade fisicamente possíveis
     refined_at              timestamp
-);
+) PARTITION BY RANGE (tpep_pickup_datetime);
 
 CREATE TABLE IF NOT EXISTS refined.daily_summary (
     trip_date                            date,
@@ -102,3 +102,25 @@ CREATE TABLE IF NOT EXISTS refined.daily_summary (
     avg_distance_miles                   double precision,
     total_amount                         numeric(18,2)
 );
+
+-- ---------------------------------------------------------------------------
+-- PARTICOES: raw, trusted e refined.trips sao particionadas por mes de tpep_pickup_datetime
+-- (12 particoes de 2022 + uma DEFAULT). A DEFAULT recebe o que cai fora de 2022 ou tem
+-- pickup nulo (a raw tem timestamps de 2002, 2008 etc.); na trusted e na refined ela fica vazia.
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE
+    parent text;
+    m      int;
+BEGIN
+    FOREACH parent IN ARRAY ARRAY['raw.yellow_tripdata', 'trusted.yellow_tripdata', 'refined.trips'] LOOP
+        FOR m IN 1..12 LOOP
+            EXECUTE format(
+                'CREATE TABLE IF NOT EXISTS %s_2022_%s PARTITION OF %s FOR VALUES FROM (%L) TO (%L)',
+                parent, lpad(m::text, 2, '0'), parent,
+                make_date(2022, m, 1), (make_date(2022, m, 1) + interval '1 month')::date);
+        END LOOP;
+        EXECUTE format('CREATE TABLE IF NOT EXISTS %s_default PARTITION OF %s DEFAULT', parent, parent);
+    END LOOP;
+END $$;
+

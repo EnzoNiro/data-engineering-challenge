@@ -98,6 +98,11 @@ jobs:
           psql -h localhost -U wecogno -d wecogno_dw -v ON_ERROR_STOP=1 \
             -f challenge/sql/init/01_init_warehouse.sql
 
+      - name: Testar o particionamento (roteamento, DEFAULT e TRUNCATE)
+        run: |
+          psql -h localhost -U wecogno -d wecogno_dw -v ON_ERROR_STOP=1 \
+            -f challenge/sql/tests/partition_smoke.sql
+
       - name: Ajustar Postgres para carga em massa (banco descartável do CI)
         run: |
           psql -h localhost -U wecogno -d wecogno_dw \

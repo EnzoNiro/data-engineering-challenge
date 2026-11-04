@@ -64,7 +64,8 @@ challenge/
 ├── scripts/run_direct.sh       # pipeline completo sem Airflow
 ├── tests/test_validate_core.py # teste do núcleo da validação com dados sintéticos
 ├── sql/
-│   ├── init/                   # DDL dos schemas e tabelas (roda na criação do warehouse)
+│   ├── init/                   # DDL dos schemas, tabelas e partições (roda na criação do warehouse)
+│   ├── tests/                  # partition_smoke.sql: teste rápido do particionamento (CI)
 │   ├── transform/              # SQL de transformação (resumo diário)
 │   └── queries/                # queries das 4 perguntas
 ├── data/                       # área de trabalho da DAG (não versionada) — veja data/README.md
@@ -99,7 +100,8 @@ disco livre (são ~40 milhões de linhas em três camadas).
    ```
    ou, de fora do Docker, `localhost:5433` (banco `wecogno_dw`, usuário/senha `wecogno`).
 
-Para recomeçar do zero (apaga os bancos): `docker compose down -v`.
+Para recomeçar do zero (apaga os bancos): `docker compose down -v`. Se você já tinha um volume
+criado antes do particionamento, use esse comando: o DDL só roda na criação do volume.
 
 ## Executar pelo GitHub Actions (sem Docker local)
 
@@ -146,7 +148,7 @@ Outras verificações:
   nulos, datas invertidas, distâncias negativas e outliers.
 - **Reproduzir uma resposta à mão** no Postgres local: veja `sql/queries/` e rode no `psql`.
 
-### Resultado da validação (execução do workflow com `run_twice`)
+### Resultado da validação (run #3, antes do particionamento)
 
 - **Estrutura da DAG:** OK (8 tarefas, ordem `prepare_landing >> load_raw >> load_trusted >> load_refined >> quality_checks >> generate_answers >> export_samples >> validate_results`).
 - **Validação independente:** **38 de 38 checagens OK** nas duas execuções. Raw por mês e total (39.656.098), trusted e refined (39.641.924), Q2, Q3 e Q4 recalculados direto dos Parquet batem com o Postgres.
@@ -169,10 +171,18 @@ não decide se as regras da trusted são as certas (isso está explicado em "Dec
   leitura e na escrita sem exigir um cluster.
 - **Dois PostgreSQL separados:** um para metadados do Airflow e outro para o warehouse.
 - **Camadas em schemas distintos** (`raw`, `trusted`, `refined`), com DDL explícito em
-  `sql/init`. As cargas **sobrescrevem** a tabela (`overwrite` com `truncate`: o Spark esvazia
-  a tabela, mantém o DDL e recarrega tudo), e o resumo diário é refeito com `TRUNCATE` +
-  `INSERT ... SELECT`. Nada é acrescentado em cima do que já existia, então rodar a DAG de
-  novo **não duplica** os dados (carga idempotente).
+  `sql/init`. As cargas **recarregam** a tabela: o job faz `TRUNCATE` (em SQL, que esvazia
+  também as partições e mantém o DDL) e depois grava com `append`; o resumo diário é refeito
+  com `TRUNCATE` + `INSERT ... SELECT`. Nada é acrescentado em cima do que já existia, então
+  rodar a DAG de novo **não duplica** os dados (carga idempotente).
+- **Tabelas particionadas por mês** de `tpep_pickup_datetime` (`raw`, `trusted` e `refined.trips`):
+  12 partições de 2022 mais uma `DEFAULT`, que recebe pickup nulo ou fora de 2022 (a raw tem
+  timestamps de 2002, 2008 etc.) e fica vazia na trusted e na refined. Particionei pela própria
+  coluna de data do evento, e não por colunas `ano`/`mes` extras, para que filtros pelo horário
+  da viagem (como a Q2) leiam só as partições necessárias. Por que não pelo `overwrite` do Spark:
+  ele emite `TRUNCATE TABLE ONLY`, que o Postgres recusa em tabela particionada, então o
+  `TRUNCATE` é feito em SQL antes da escrita. Nesta versão a carga ainda é total; a evolução
+  natural é refazer só a partição do mês (carga incremental).
 - **Arquivos já são Parquet:** apesar do `.gz`, a compressão é interna; não há descompactação.
 - **Schema canônico por arquivo:** os meses têm tipos inconsistentes (`passenger_count`,
   `RatecodeID`, caixa de `airport_fee`). Cada arquivo é lido sozinho, convertido para o schema

@@ -53,8 +53,21 @@ def read_table(
     )
 
 
+def truncate_table(table: str) -> None:
+    """TRUNCATE da tabela (e de todas as particoes dela). Feito em SQL de proposito: com
+    mode('overwrite') + truncate o Spark emite 'TRUNCATE TABLE ONLY', que o Postgres recusa em
+    tabela particionada."""
+    from contextlib import closing
+
+    with closing(config.get_connection()) as conn:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(f"TRUNCATE TABLE {table}")
+
+
 def write_table(df: DataFrame, table: str, num_partitions: int | None = None) -> None:
-    """Sobrescreve o conteúdo da tabela mantendo o DDL (truncate) => carga idempotente."""
+    """Recarrega a tabela: TRUNCATE (mantem o DDL e as particoes) + append => carga idempotente."""
+    truncate_table(table)
     (
         df.write.format("jdbc")
         .option("url", config.JDBC_URL)
@@ -62,9 +75,8 @@ def write_table(df: DataFrame, table: str, num_partitions: int | None = None) ->
         .option("password", config.WAREHOUSE_PASSWORD)
         .option("driver", config.JDBC_DRIVER)
         .option("dbtable", table)
-        .option("truncate", "true")
         .option("batchsize", "50000")
         .option("numPartitions", num_partitions or config.SPARK_CORES)
-        .mode("overwrite")
+        .mode("append")
         .save()
     )
