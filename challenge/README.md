@@ -133,7 +133,7 @@ A DAG termina com duas tarefas de verificação, além das checagens de contagem
   inspecionar os dados sem cliente SQL.
 - **`validate_results`** (`etl/validate.py`): recalcula, **sem Spark e sem Postgres**, direto dos 12
   Parquet (PyArrow + NumPy), as contagens por mês da raw (rodapé dos arquivos), as linhas da
-  trusted/refined, as viagens plausíveis, a Q2, a Q3 (distância e dia) e a Q4 (média, desvio, mínimo,
+  trusted/refined, as linhas de cada partição (12 meses e `DEFAULT`), as viagens plausíveis, a Q2, a Q3 (distância e dia) e a Q4 (média, desvio, mínimo,
   máximo e quartis), e compara com o que o pipeline gravou. Cada checagem vira uma linha de
   `outputs/validation.md` e qualquer divergência faz a tarefa falhar.
 
@@ -193,7 +193,8 @@ não decide se as regras da trusted são as certas (isso está explicado em "Dec
 - **Fuso em UTC** no Spark e na JVM: os horários das corridas são "relógio de parede" e não
   podem ser deslocados na gravação.
 - **Valores monetários em `numeric(12,2)`**, distância em `double precision`.
-- **Leitura paralela via JDBC** particionada por `file_month` (um mês por partição).
+- **Leitura paralela via JDBC** particionada por `file_month` (1 a 12). O Spark usa 11 partições de
+  leitura (o mês 12 cai junto na última), o que não perde linhas; só reduz um pouco o paralelismo.
 - **Resumo diário em SQL** (ELT dentro do Postgres), por ser uma agregação simples sobre a
   tabela final.
 
