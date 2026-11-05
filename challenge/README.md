@@ -8,28 +8,87 @@ Este repositório é um fork de
 [datarisk-io/data-engineering-challenge](https://github.com/datarisk-io/data-engineering-challenge);
 conforme o enunciado, o código e a documentação ficam no diretório `challenge/`.
 
-> **Status de validação:** o pipeline foi executado ponta a ponta no GitHub Actions
-> (workflow `Run ETL`, modo `airflow_dag`): as 6 tarefas da DAG terminaram em sucesso em
-> cerca de 19 minutos, e as contagens fecham entre as camadas (refined = trusted). Os números
-> da seção [Respostas](#respostas) vêm dessa execução.
+> **Status de validação:** o pipeline foi executado ponta a ponta no GitHub Actions (workflow
+> `Run ETL`, modo `airflow_dag`, duas execuções seguidas): as 8 tarefas da DAG terminaram em
+> sucesso, a validação independente fechou **65 de 65 checagens** e as contagens não mudaram na
+> segunda execução (a carga não duplica). Detalhes em [Como validar](#como-validar).
 
 ## Arquitetura
 
+**Em uma frase:** os 12 arquivos mensais entram, passam por três etapas de "arrumação" (camadas
+raw, trusted e refined) dentro de um banco PostgreSQL, e no fim as 4 perguntas são respondidas
+com SQL. O Airflow é o "gerente" que manda cada etapa rodar na ordem certa, e o Spark é o
+"operário" que faz o trabalho pesado de ler e transformar 39,6 milhões de linhas.
+
+### 1. O caminho do dado
+
 ```mermaid
 flowchart LR
-    A[data/source<br/>12 parquets] --> B[prepare_landing]
-    B --> C[load_raw<br/>PySpark]
-    C --> D[(raw.yellow_tripdata)]
-    D --> E[load_trusted<br/>PySpark]
-    E --> F[(trusted.yellow_tripdata)]
-    F --> G[load_refined<br/>PySpark + SQL]
-    G --> H[(refined.trips<br/>refined.daily_summary)]
-    H --> I[quality_checks]
-    I --> J[generate_answers]
-    J --> K[outputs/answers.md]
+    SRC["12 arquivos Parquet<br/>(1 por mês de 2022)"]
+
+    subgraph PG["PostgreSQL: banco wecogno_dw"]
+        RAW[("RAW<br/>tudo como chegou<br/>39.656.098 linhas")]
+        TRU[("TRUSTED<br/>só o que passa nas regras<br/>39.641.924 linhas")]
+        REF[("REFINED<br/>tabela final: refined.trips<br/>+ resumo por dia")]
+    end
+
+    ANS["Respostas das 4 perguntas<br/>(SQL gera answers.md)"]
+    VAL["Validação independente<br/>(lê os Parquet por outro caminho<br/>e confere o Postgres)"]
+
+    SRC -->|"Spark lê e padroniza os tipos"| RAW
+    RAW -->|"Spark aplica as regras de qualidade"| TRU
+    TRU -->|"Spark cria colunas novas<br/>(duração, velocidade, is_plausible)"| REF
+    REF -->|"SQL"| ANS
+    SRC -.->|"recalcula por fora"| VAL
+    REF -.->|"compara os números"| VAL
+
+    classDef fonte fill:#eef,stroke:#446
+    classDef camada fill:#efe,stroke:#464
+    classDef saida fill:#ffe,stroke:#664
+    class SRC fonte
+    class RAW,TRU,REF camada
+    class ANS,VAL saida
 ```
 
-DAG `wecogno_nyc_taxi_etl` (disparo manual):
+Setas cheias são o caminho do dado; setas pontilhadas são a conferência feita por fora.
+
+| Camada | Em linguagem simples | O que entra | Linhas |
+|---|---|---|---|
+| **raw** | A "caixa de entrada": guarda tudo exatamente como veio, só com os tipos padronizados. Nada é jogado fora | Os 12 arquivos | 39.656.098 |
+| **trusted** | A "triagem": só fica o que faz sentido (horários existem, a corrida termina depois de começar, é de 2022, distância não negativa) | A raw, menos 14.174 linhas descartadas (0,036%) | 39.641.924 |
+| **refined** | A "prateleira pronta": mesmas linhas da trusted, com colunas calculadas (duração, velocidade média, data, `is_plausible`) e um resumo por dia | A trusted | 39.641.924 |
+
+**Exemplo: o que acontece com 4 corridas diferentes**
+
+| Corrida | raw | trusted | refined |
+|---|---|---|---|
+| Normal (2 milhas, 12 minutos, em junho de 2022) | entra | entra | entra, `is_plausible = true` |
+| Início com data de 2002 (erro do taxímetro) | entra | **fica de fora** (não é de 2022) | não existe |
+| Termina antes de começar | entra | **fica de fora** (duração negativa) | não existe |
+| 389.678 milhas em 13 minutos | entra | entra (distância não é negativa) | entra, mas `is_plausible = false` |
+
+### 2. A ordem de execução (o que o Airflow comanda)
+
+```mermaid
+flowchart LR
+    T1["1. prepare_landing<br/>confere e arruma<br/>os 12 arquivos"] --> T2["2. load_raw<br/>Spark"]
+    T2 --> T3["3. load_trusted<br/>Spark"]
+    T3 --> T4["4. load_refined<br/>Spark + SQL"]
+    T4 --> T5["5. quality_checks<br/>as contagens fecham?"]
+    T5 --> T6["6. generate_answers<br/>roda as 4 queries"]
+    T6 --> T7["7. export_samples<br/>CSVs de amostra"]
+    T7 --> T8["8. validate_results<br/>confere por fora"]
+
+    classDef spark fill:#efe,stroke:#464
+    classDef sql fill:#ffe,stroke:#664
+    classDef check fill:#eef,stroke:#446
+    class T2,T3,T4 spark
+    class T5,T8 check
+    class T1,T6,T7 sql
+```
+
+Verde: carga com Spark. Azul: conferências. Amarelo: preparação e saídas. É uma fila reta porque
+cada etapa depende da anterior. DAG `wecogno_nyc_taxi_etl` (disparo manual):
 
 | Tarefa | O que faz |
 |---|---|
@@ -39,6 +98,40 @@ DAG `wecogno_nyc_taxi_etl` (disparo manual):
 | `load_refined` | PySpark enriquece e grava `refined.trips`; SQL monta `refined.daily_summary` |
 | `quality_checks` | Reconcilia contagens entre camadas e gera `outputs/data_quality.md` |
 | `generate_answers` | Executa `sql/queries/*.sql` e gera `outputs/answers.md` com as tabelas |
+| `export_samples` | Exporta CSVs de amostra para `outputs/samples/` |
+| `validate_results` | Recalcula as métricas direto dos Parquet e compara com o Postgres |
+
+### 3. Quem faz o quê
+
+| Peça | Papel (analogia) | Por que está aqui |
+|---|---|---|
+| **Airflow** | O gerente: decide a ordem, repete uma tarefa que falhou, registra o que rodou | Orquestração pedida no desafio |
+| **PySpark** | O operário: lê e transforma milhões de linhas em paralelo | Volume grande; escala se crescer |
+| **PostgreSQL (warehouse)** | O armazém: guarda as três camadas e responde as consultas SQL | Pedido no desafio |
+| **PostgreSQL (do Airflow)** | O caderno do gerente: só guarda o histórico das execuções | Separado para não misturar com os dados |
+| **Docker Compose** | A caixa que sobe tudo junto, igual em qualquer computador | Reprodutibilidade |
+| **GitHub Actions** | Um computador temporário na nuvem, usado para rodar e provar que funciona | Eu não tinha Docker local |
+| **PyArrow + NumPy** | O auditor: refaz as contas por outro caminho para conferir o resultado | Validação independente |
+
+## Glossário rápido
+
+| Termo | O que é |
+|---|---|
+| **ETL** | Extrair (ler a fonte), Transformar (limpar e calcular) e Carregar (gravar no destino). É o que o pipeline faz do começo ao fim |
+| **Parquet** | Formato de arquivo para dados em colunas, compacto e rápido de ler. Os 12 arquivos de entrada são Parquet (apesar do `.gz` no nome) |
+| **`tpep_pickup_datetime`** (pickup) | Data e hora em que o passageiro **embarcou**, ou seja, o início da corrida. É a coluna usada para dizer "em que dia a viagem começou" e para particionar as tabelas |
+| **`tpep_dropoff_datetime`** (dropoff) | Data e hora em que o passageiro **desembarcou**, ou seja, o fim da corrida. Junto com o pickup dá a duração |
+| **`trip_distance`** | Distância da corrida, em milhas, medida pelo taxímetro. Base das perguntas 3 e 4 |
+| **`trip_date`** | Data do início da corrida (só o dia), calculada a partir do pickup |
+| **`trip_duration_min`** | Duração em minutos: dropoff menos pickup |
+| **`avg_speed_mph`** | Velocidade média em milhas por hora: distância dividida pela duração |
+| **`is_plausible`** | Marca "verdadeiro" quando a corrida é fisicamente possível (duração entre 0 e 24 h e velocidade de até 100 mph). Não apaga nada: só sinaliza as suspeitas |
+| **`refined.daily_summary`** | Uma linha por dia (365 no total) com quantas corridas começaram, quantas começaram e terminaram no mesmo dia, distância total e média e valor total. É um resumo pronto para consultar |
+| **Outlier** | Valor muito fora do normal, como a corrida de 389.678 milhas. Distorce médias e desvio padrão |
+| **Partição** | Divisão de uma tabela grande em pedaços (aqui, um por mês de pickup). Consultas por data leem só os pedaços necessários |
+| **Idempotente** | Rodar de novo dá o mesmo resultado, sem duplicar. Aqui, cada carga esvazia e recarrega a tabela |
+| **Staging** | Tabela temporária onde o Spark grava primeiro. Só depois do sucesso o dado vai para a tabela final, então uma falha no meio não deixa a tabela quebrada |
+| **DAG** | O "mapa" das tarefas do Airflow e da ordem entre elas |
 
 ## Estrutura
 
