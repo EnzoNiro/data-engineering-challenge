@@ -127,7 +127,7 @@ cada etapa depende da anterior. DAG `wecogno_nyc_taxi_etl` (disparo manual):
 | **`avg_speed_mph`** | Velocidade média em milhas por hora: distância dividida pela duração |
 | **`is_plausible`** | Marca "verdadeiro" quando a corrida é fisicamente possível (duração entre 0 e 24 h e velocidade de até 100 mph). Não apaga nada: só sinaliza as suspeitas |
 | **`refined.daily_summary`** | Uma linha por dia (365 no total) com quantas corridas começaram, quantas começaram e terminaram no mesmo dia, distância total e média e valor total. É um resumo pronto para consultar |
-| **Outlier** | Valor muito fora do normal, como a corrida de 389.678 milhas. Distorce médias e desvio padrão |
+| **Valor fora do padrão (outlier)** | Valor muito distante do normal, como a corrida de 389.678 milhas. Distorce médias e desvio padrão |
 | **Partição** | Divisão de uma tabela grande em pedaços (aqui, um por mês de pickup). Consultas por data leem só os pedaços necessários |
 | **Idempotente** | Rodar de novo dá o mesmo resultado, sem duplicar. Aqui, cada carga esvazia e recarrega a tabela |
 | **Staging** | Tabela temporária onde o Spark grava primeiro. Só depois do sucesso o dado vai para a tabela final, então uma falha no meio não deixa a tabela quebrada |
@@ -238,7 +238,7 @@ Outras verificações:
   contagens após a 1ª e a 2ª execução.
 - **Núcleo da validação**: `cd challenge && PYTHONPATH=. python tests/test_validate_core.py`
   compara o cálculo em NumPy com um cálculo linha a linha em Python puro, em dados sintéticos com
-  nulos, datas invertidas, distâncias negativas e outliers.
+  nulos, datas invertidas, distâncias negativas e valores fora do padrão.
 - **Reproduzir uma resposta à mão** no Postgres local: veja `sql/queries/` e rode no `psql`.
 
 ### Resultado da validação (execução do workflow com `run_twice`, após o particionamento)
@@ -310,7 +310,7 @@ descartar corridas legítimas. Quantos registros cada regra descarta fica em
 `dropoff_date`, `trip_duration_min`, `avg_speed_mph` e `is_plausible`.
 
 `is_plausible` marca viagens com duração entre 0 e 24 h e velocidade média de até 100 mph.
-Ela **não remove** linhas: serve para analisar distâncias com e sem outliers (o dado de táxi
+Ela **não remove** linhas: serve para analisar distâncias com e sem valores fora do padrão (o dado de táxi
 de NY costuma ter viagens de milhares de milhas em poucos minutos, que são erros de
 medição). Por isso as perguntas 3 e 4 trazem **duas linhas**: todas as viagens e somente as
 plausíveis.
@@ -341,7 +341,7 @@ refined, 65.538 viagens (0,17%) ficam com `is_plausible = false`.
 
 As queries abaixo são exatamente as de `sql/queries/`.
 
-**Sobre o outlier da Q3 e da Q4:** a viagem de 389.678,46 milhas durou 13 minutos, o que dá
+**Sobre o valor fora do padrão (outlier) da Q3 e da Q4:** a viagem de 389.678,46 milhas durou 13 minutos, o que dá
 uma velocidade média de cerca de 1,8 milhão de mph: é erro de medição na fonte, não uma viagem
 real. Por isso as duas perguntas trazem também a leitura apenas com as viagens plausíveis
 (duração de até 24 h e velocidade média de até 100 mph). Nessa leitura, o desvio padrão cai de
